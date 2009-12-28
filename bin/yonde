@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+
+require 'yonde'
+
+# Tk.set_palette 'black'
+Thread.abort_on_exception = true
+Tk.root.bind('<Control-q>'){ Tk.exit }
+yonde = Yonde.new(Tk.root)
+yonde.controller.use_pty
+
+seconds, microseconds = 0, 100
+time = FFI::Tcl::TclTime.new(seconds, microseconds)
+FFI::Tcl.set_max_block_time(time)
+
+tcl_dont_wait     = (1 << 1)
+tcl_window_events = (1 << 2)
+tcl_file_events   = (1 << 3)
+tcl_timer_events  = (1 << 4)
+tcl_idle_events   = (1 << 5)
+tcl_all_events    = (~(1 << 1))
+
+loop do
+  if Tk.interp.do_one_event(tcl_dont_wait | tcl_all_events) == 0
+    sleep 0.01
+  end
+end
