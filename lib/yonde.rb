@@ -8,17 +8,28 @@ require 'pty'
 # TODO:
 #   * Use ioctl to inform about the size of the window, until then we have to
 #     use the size specified in the terminfo
-class Yonde < Struct.new(:parent, :buffer, :controller)
+class Yonde < Struct.new(:parent, :buffer, :controller, :terminfo)
   def self.require_lib
     require 'yonde/buffer'
     require 'yonde/pty'
     require 'yonde/controller'
+    require 'yonde/terminfo'
   end
 
   def initialize(parent = Tk.root)
     self.parent = parent
     self.buffer = Buffer.new(parent)
+    buffer.pack
     self.controller = Controller.new(buffer)
+  end
+
+  def use_pty
+    controller.use_pty
+  end
+
+  def use_terminfo(term)
+    self.terminfo = Yonde.parse_terminfo(term)
+    controller.use_terminfo(term, terminfo)
   end
 
   def <<(input)

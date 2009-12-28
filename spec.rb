@@ -5,6 +5,7 @@ require_relative 'lib/yonde'
 
 describe Yonde do
   yonde = Yonde.new
+  yonde.use_terminfo('rxvt-unicode')
 
   it 'starts out empty' do
     yonde.content.should.be.empty

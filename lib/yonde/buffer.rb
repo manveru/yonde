@@ -29,6 +29,11 @@ class Yonde
       value == "\n"
     end
 
+    def adjust_insert
+      mark_set(:insert, "#{y}.#{x}")
+      see(:insert)
+    end
+
     def y=(y)
       @y = y.abs
     end
@@ -39,35 +44,27 @@ class Yonde
 
     def write(string)
       string.each_char do |char|
-        replace("#{y}.#{x}", "#{y}.#{x + 1}", char)
+        replace("#{y}.#{x}", "#{y}.#{x + 1}", char, @tag)
         self.x += 1
       end
+      adjust_insert
     end
 
     def backspace
       self.x -= 1
       replace("#{y}.#{x}", "#{y}.#{x + 1}", ' ')
+      adjust_insert
     end
 
     def carriage_return
       self.x = 0
+      adjust_insert
     end
 
     def newline
       self.y += 1
       insert("#{y}.#{x}", "\n")
-    end
-
-    def create_cells(y)
-      @matrix[y] = matrix_y = []
-      cell_y = @font_height + (@font_height * y)
-
-      80.times do |x|
-        cell_x = @font_width + (@font_width * x)
-        matrix_y[x] = create_text(cell_x, cell_y)
-      end
-
-      matrix_y
+      adjust_insert
     end
 
     def parm_dch(count)
@@ -92,6 +89,7 @@ class Yonde
     end
 
     def wtf(*args)
+      Kernel.raise NotImplementedError
     end
 
     def cursor_invisible
@@ -113,30 +111,37 @@ class Yonde
       end
 
       self.x, self.y = x, y
+      adjust_insert
     end
 
     def parm_up_cursor(count)
       self.y -= count
+      adjust_insert
     end
 
     def parm_right_cursor(count)
       self.x += count
+      adjust_insert
     end
 
     def parm_down_cursor(count)
       self.y += count
+      adjust_insert
     end
 
     def parm_left_cursor(count)
       self.x -= count
+      adjust_insert
     end
 
     def row_address(row)
       self.y = row
+      adjust_insert
     end
 
     def column_address(column)
       self.x = column
+      adjust_insert
     end
 
     A_STANDOUT   = 1
@@ -159,19 +164,24 @@ class Yonde
 
     # start programs using cup
     def enter_ca_mode
+      Kernel.raise NotImplementedError
     end
 
     # turn on automatic margins
     def enter_am_mode
+      Kernel.raise NotImplementedError
     end
 
     def exit_standout_mode
+      @standout_mode = false
     end
 
     def exit_underline_mode
+      @underline_mode = false
     end
 
     def exit_insert_mode
+      Kernel.raise NotImplementedError
     end
 
     COLORS = []
@@ -188,36 +198,18 @@ class Yonde
       @pair = PAIRS.fetch(index)
     end
 
-    def change_scroll_region(*args)
-    end
-
-    def keypad_local
-    end
-
     def key_up
       self.y -= 1
     end
 
     def clr_eos
-      if line = @matrix[y]
-        line.each_with_index do |cell, cell_x|
-          cell.configure(text: ' ') if cell_x >= self.x
-        end
-      end
-
-      if line = @matrix[(y+1)..-1]
-        line.each do |cells|
-          cells.each do |cell|
-            cell.configure(text: ' ')
-          end
-        end
-      end
+      replace("#{y}.#{x}", 'end', get("#{y}.#{x}", "end").gsub(/./, ' '))
+      adjust_insert
     end
 
     def clr_eol
-      @matrix[y][x..-1].each do |cell|
-        cell.configure(text: ' ')
-      end
+      replace("#{y}.#{x}", "#{y}.#{x} lineend", get("#{y}.#{x}", "#{y}.#{x} lineend").gsub(/./, ' '))
+      adjust_insert
     end
 
     def key_backspace
@@ -226,9 +218,6 @@ class Yonde
 
     def cursor_home
       self.y, self.x = 0, 0
-    end
-
-    def clear_all_tabs
     end
 
     def clear_screen
@@ -295,7 +284,6 @@ class Yonde
     end
 
     ANSI_FOREGROUND = {}
-    ANSI_FOREGROUND[ 0] = BRIGHT_WHITE
     ANSI_FOREGROUND[30] = BRIGHT_BLACK
     ANSI_FOREGROUND[31] = BRIGHT_RED
     ANSI_FOREGROUND[32] = BRIGHT_GREEN
@@ -308,6 +296,7 @@ class Yonde
 
     def set_a_foreground(index)
       @foreground = ANSI_FOREGROUND.fetch(index)
+      update_tag
     end
 
     ANSI_BACKGROUND = {}
@@ -323,61 +312,95 @@ class Yonde
 
     def set_a_background(index)
       @background = ANSI_BACKGROUND.fetch(index)
+      update_tag
     end
 
     ANSI_ATTRIBUTE = {}
+    ANSI_ATTRIBUTE[1] = A_BOLD
+    ANSI_ATTRIBUTE[7] = A_REVERSE
+
+    ANSI_RESET = [0]
 
     def set_foreground(*indices)
-      indices.each do |index|
-        index = index.to_i
+      if indices.empty? || indices == ANSI_RESET
+        @foreground = BRIGHT_WHITE
+        @background = DARK_BLACK
+      else
+        indices.each do |index|
+          index = index.to_i
 
-        if fg = ANSI_FOREGROUND[index]
-          @foreground = fg
-        elsif bg = ANSI_BACKGROUND[index]
-          @background = bg
-        elsif at = ANSI_ATTRIBUTE[index]
-          @attribute = at
-        else
-          raise indices.inspect
+          if fg = ANSI_FOREGROUND[index]
+            @foreground = fg
+          elsif bg = ANSI_BACKGROUND[index]
+            @background = bg
+          elsif at = ANSI_ATTRIBUTE[index]
+            @attribute = at
+          else
+            Kernel.warn "set_foreground(#{indices.inspect})"
+          end
         end
       end
+
+      update_tag
     end
 
     def set_background(*indices)
-      indices.each do |index|
-        index = index.to_i
+      if indices.empty? || indices == ANSI_RESET
+        @foreground = BRIGHT_WHITE
+        @background = DARK_BLACK
+      else
+        indices.each do |index|
+          index = index.to_i
 
-        if bg = ANSI_BACKGROUND[index]
-          @background = bg
-        elsif fg = ANSI_FOREGROUND[index]
-          @foreground = fg
-        elsif at = ANSI_ATTRIBUTE[index]
-          @attribute = at
-        else
-          raise indices.inspect
+          if bg = ANSI_BACKGROUND[index]
+            @background = bg
+          elsif fg = ANSI_FOREGROUND[index]
+            @foreground = fg
+          elsif at = ANSI_ATTRIBUTE[index]
+            @attribute = at
+          else
+            Kernel.warn "set_background(#{indices.inspect})"
+          end
         end
       end
+
+      update_tag
     end
 
     def set_tab
+      Kernel.raise NotImplementedError
     end
 
     # Shift to codeset 0 (EUC set 0, ASCII)
     def set0_des_seq
+      Kernel.raise NotImplementedError
     end
 
     def reset_1string
+      Kernel.raise NotImplementedError
     end
 
     def init_1string
+      Kernel.raise NotImplementedError
     end
 
     # Set default pair to its original value
     def orig_pair
+      Kernel.raise NotImplementedError
     end
 
     # enter 'keyboard_transmit' mode
     def keypad_xmit
+      Kernel.raise NotImplementedError
+    end
+
+    TAGS = {}
+    def update_tag
+      @tag = "#@foreground~#@background~#@attribute"
+      TAGS[@tag] ||= (
+        tag_configure(@tag, foreground: @foreground, background: @background)
+        true
+      )
     end
   end
 end

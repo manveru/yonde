@@ -18,7 +18,7 @@ class Yonde
   # It would be nice to able to configure tk in that regard.
   # Also it's not trivial to index counting from the top-left of the current
   # view, but maybe we find a solution for that.
-  class Controller < Struct.new(:buffer, :stack, :queue)
+  class Controller < Struct.new(:buffer, :queue, :term, :terminfo, :termbinds)
     CHANGE_SCROLL_REGION = /\A\e\[(\d+);(\d+)r/
     COLUMN_ADDRESS       = /\A\e\[(\d+)G/
     CURSOR_ADDRESS       = /\A\e\[(\d+);(\d+)H/
@@ -39,101 +39,139 @@ class Yonde
 
     def initialize(buffer)
       self.buffer = buffer
-      self.stack = []
+      self.termbinds = {}
       self.queue = Queue.new
+
+      buffer.bind('<Key>'){|ev|    queue << ev.unicode; Tk.callback_break }
+      buffer.bind('<Return>'){|ev| queue << ev.unicode; Tk.callback_break }
+      buffer.bind('<Up>'){         queue << terminfo[:key_up]; Tk.callback_break }
+      buffer.bind('<Down>'){       queue << terminfo[:key_down]; Tk.callback_break }
+      buffer.bind('<Left>'){       queue << terminfo[:key_left]; Tk.callback_break }
+      buffer.bind('<Right>'){      queue << terminfo[:key_right]; Tk.callback_break }
+      buffer.focus
+    end
+
+    def destroy
+      buffer.destroy
+      Tk.exit
     end
 
     def use_pty
       Yonde.pty(queue, self)
     end
 
-    def call(input)
-      stack.concat(input.chars.to_a)
-      term_input(stack, [])
+    def use_terminfo(term, terminfo)
+      terminfo.each do |name, sequence|
+        next if sequence =~ /%[^%]/ # uses parameter string
+        bind(sequence, name)
+      end
+
+      case term
+      when /rxvt|xterm/
+        bind("\e[H\e[2J", :cursor_home)
+        bind("\r", :carriage_return)
+        bind("\b", :backspace)
+        bind("\n", :newline)
+      end
+
+      self.term = term
+      self.terminfo = terminfo
     end
 
-    def term_cmd(seq, md, *cmd)
-      # p term_cmd: cmd
-      md[0].size.times{ seq.shift }
-      buffer.send(*cmd) unless cmd.empty?
-      seq.empty?
+    # called when outbuf changes
+    def call(outbuf)
+      # p outbuf.size
+
+      begin
+        size = outbuf.size
+        # p before: outbuf
+        try_execute(outbuf) && outbuf.replace('')
+        # p after: outbuf
+        return if outbuf.empty?
+        new_size = outbuf.size
+      end while size != new_size
     end
 
-    def term_input(sequence, lost)
-      sequence[0,0] = lost
-      string = sequence.join
+    def bind(sequence, action_name)
+      return unless sequence.is_a?(String)
+      return if sequence.empty?
+      termbinds[sequence] = action_name.to_sym
+    end
 
-      case string
-      when PARM_DCH
-        return term_cmd(sequence, $~, :parm_dch, $1.to_i)
-      when CHANGE_SCROLL_REGION
-        return term_cmd(sequence, $~, :change_scroll_region, $1.to_i, $2.to_i)
-      when COLUMN_ADDRESS
-        return term_cmd(sequence, $~, :column_address, $1.to_i)
-      when ROW_ADDRESS
-        return term_cmd(sequence, $~, :row_address, $1.to_i)
-      when SET_A_BACKGROUND
-        return term_cmd(sequence, $~, :set_a_background, $1.to_i)
-      when SET_A_FOREGROUND
-        return term_cmd(sequence, $~, :set_a_foreground, $1.to_i)
-      when SET_FOREGROUND
-        args = *$1.split(';').map{|a| a.to_i }
-        return term_cmd(sequence, $~, :wtf, *args) if args.empty?
-        return term_cmd(sequence, $~, :set_foreground, *args)
-      when ERASE_CHARS
-        return term_cmd(sequence, $~, :erase_chars, $1.to_i)
-      when INITIALIZE_COLOR
-        return term_cmd(sequence, $~, :initialize_color, $1)
-      when SET_BACKGROUND
-        args = *$1.split(';').map{|a| a.to_i }
-        return term_cmd(sequence, $~, :wtf, *args) if args.empty?
-        return term_cmd(sequence, $~, :set_background, *args)
-      when PARM_ICH
-        return term_cmd(sequence, $~, :parm_ich, $1.to_i)
-      when CURSOR_ADDRESS
-        return term_cmd(sequence, $~, :cursor_address, $1.to_i, $2.to_i)
-      when PARM_UP_CURSOR
-        return term_cmd(sequence, $~, :parm_up_cursor, $1.to_i)
-      when PARM_DOWN_CURSOR
-        return term_cmd(sequence, $~, :parm_down_cursor, $1.to_i)
-      when PARM_RIGHT_CURSOR
-        return term_cmd(sequence, $~, :parm_right_cursor, $1.to_i)
-      when PARM_LEFT_CURSOR
-        return term_cmd(sequence, $~, :parm_left_cursor, $1.to_i)
-      when CURSOR_HOME
-        return term_cmd(sequence, $~, :cursor_home)
-      when /\A\e\[>(\w)/
-        return term_cmd(sequence, $~, :wtf, $1)
-      else
-        return false if sequence.first == "\e"
-
-        while char = sequence.shift
-          case char
-          when "\e"
-            sequence.unshift(char)
-            return false
-          when "\r"
-            buffer.carriage_return
-          when "\b"
-            buffer.backspace
-          when "\n"
-            buffer.newline
-          when "\a"
-            @matrix[y][0..x].each do |cell|
-              cell.configure(text: ' ')
-            end
-            self.x = 0
-          when "\t", /[[:print:]]/
-            buffer.write(char)
-          else
-            p fail: char
-            sequence[0,0] = char
-            return false # fail char.inspect
-          end
+    def try_execute(outbuf)
+      termbinds.each do |sequence, action|
+        if sequence == outbuf
+          # p action1: action
+          outbuf.slice!(0, sequence.size)
+          buffer.send(action)
+          return true
+        elsif outbuf.start_with?(sequence)
+          # p action3: action
+          outbuf.slice!(0, sequence.size)
+          buffer.send(action)
+          return nil
+        elsif sequence.start_with?(outbuf.slice(0, sequence.size))
+          # p action2: action
+          return nil
         end
       end
 
-      nil
+      term_input(outbuf)
+    end
+
+    def term_cmd(string, full, *cmd)
+      # p term_cmd: cmd
+      string.slice!(0, full.size)
+      buffer.send(*cmd) unless cmd.empty?
+      string.empty?
+    end
+
+    def term_input(string)
+      # p string
+      case string
+      when PARM_DCH
+        term_cmd(string, $&, :parm_dch, $1.to_i)
+      when CHANGE_SCROLL_REGION
+        term_cmd(string, $&, :change_scroll_region, $1.to_i, $2.to_i)
+      when COLUMN_ADDRESS
+        term_cmd(string, $&, :column_address, $1.to_i)
+      when ROW_ADDRESS
+        term_cmd(string, $&, :row_address, $1.to_i)
+      when SET_A_BACKGROUND
+        term_cmd(string, $&, :set_a_background, $1.to_i)
+      when SET_A_FOREGROUND
+        term_cmd(string, $&, :set_a_foreground, $1.to_i)
+      when SET_FOREGROUND
+        args = *$1.split(';').map{|a| a.to_i }
+        term_cmd(string, $&, :set_foreground, *args)
+      when ERASE_CHARS
+        term_cmd(string, $&, :erase_chars, $1.to_i)
+      when INITIALIZE_COLOR
+        term_cmd(string, $&, :initialize_color, $1)
+      when SET_BACKGROUND
+        args = *$1.split(';').map{|a| a.to_i }
+        term_cmd(string, $&, :set_background, *args)
+      when PARM_ICH
+        term_cmd(string, $&, :parm_ich, $1.to_i)
+      when CURSOR_ADDRESS
+        term_cmd(string, $&, :cursor_address, $1.to_i, $2.to_i)
+      when PARM_UP_CURSOR
+        term_cmd(string, $&, :parm_up_cursor, $1.to_i)
+      when PARM_DOWN_CURSOR
+        term_cmd(string, $&, :parm_down_cursor, $1.to_i)
+      when PARM_RIGHT_CURSOR
+        term_cmd(string, $&, :parm_right_cursor, $1.to_i)
+      when PARM_LEFT_CURSOR
+        term_cmd(string, $&, :parm_left_cursor, $1.to_i)
+      when CURSOR_HOME
+        term_cmd(string, $&, :cursor_home)
+      when /\A\e\[>(\w)/
+        term_cmd(string, $&, :wtf, $1)
+      when /\A\e/
+        nil
+      when /\A[[:print:]\t]+/
+        term_cmd(string, $&, :write, $&)
+      end
     end
   end
 end

@@ -2,11 +2,12 @@
 
 require 'yonde'
 
-# Tk.set_palette 'black'
+Tk.set_palette 'black'
 Thread.abort_on_exception = true
 Tk.root.bind('<Control-q>'){ Tk.exit }
 yonde = Yonde.new(Tk.root)
-yonde.controller.use_pty
+yonde.use_terminfo(ENV['TERM'])
+yonde.use_pty
 
 seconds, microseconds = 0, 100
 time = FFI::Tcl::TclTime.new(seconds, microseconds)
