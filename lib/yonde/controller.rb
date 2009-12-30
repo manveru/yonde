@@ -18,7 +18,7 @@ class Yonde
   # It would be nice to able to configure tk in that regard.
   # Also it's not trivial to index counting from the top-left of the current
   # view, but maybe we find a solution for that.
-  class Controller < Struct.new(:buffer, :queue, :term, :terminfo, :termbinds)
+  class Controller < Struct.new(:buffer, :queue, :term, :terminfo, :termbinds, :keypad)
     CHANGE_SCROLL_REGION = /\A\e\[(\d+);(\d+)r/
     COLUMN_ADDRESS       = /\A\e\[(\d+)G/
     CURSOR_ADDRESS       = /\A\e\[(\d+);(\d+)H/
@@ -42,13 +42,50 @@ class Yonde
       self.termbinds = {}
       self.queue = Queue.new
 
-      buffer.bind('<Key>'){|ev|    queue << ev.unicode; Tk.callback_break }
-      buffer.bind('<Return>'){|ev| queue << ev.unicode; Tk.callback_break }
-      buffer.bind('<Up>'){         queue << terminfo[:key_up]; Tk.callback_break }
-      buffer.bind('<Down>'){       queue << terminfo[:key_down]; Tk.callback_break }
-      buffer.bind('<Left>'){       queue << terminfo[:key_left]; Tk.callback_break }
-      buffer.bind('<Right>'){      queue << terminfo[:key_right]; Tk.callback_break }
+      buffer.controller = self
+
+      key('Key'){|event|    queue << event.unicode }
+      key('Return'){|event| queue << event.unicode }
+      key('Up'){            queue << terminfo[:key_up] }
+      key('Down'){          queue << terminfo[:key_down] }
+      key('Left'){          queue << terminfo[:key_left] }
+      key('Right'){         queue << terminfo[:key_right] }
+
+      key('KP_Begin'){|event|    queue << keypad ? event.unicode : terminfo[:key_beg] }
+      key('KP_Delete'){|event|   queue << keypad ? event.unicode : terminfo[:key_dc] }
+      key('KP_Down'){|event|     queue << keypad ? event.unicode : terminfo[:key_down] }
+      key('KP_End'){|event|      queue << keypad ? event.unicode : terminfo[:key_end] }
+      key('KP_Enter'){|event|    queue << keypad ? event.unicode : terminfo[:key_enter] }
+      key('KP_Home'){|event|     queue << keypad ? event.unicode : terminfo[:key_home] }
+      key('KP_Left'){|event|     queue << keypad ? event.unicode : terminfo[:key_left] }
+      key('KP_Next'){|event|     queue << keypad ? event.unicode : terminfo[:key_npage] }
+      key('KP_Prior'){|event|    queue << keypad ? event.unicode : terminfo[:key_ppage] }
+      key('KP_Right'){|event|    queue << keypad ? event.unicode : terminfo[:key_right] }
+      key('KP_Up'){|event|       queue << keypad ? event.unicode : terminfo[:key_up] }
+
+      # key('KP_Add'){|event|      queue << keypad ? event.unicode : terminfo[] }
+      # key('KP_Subtract'){|event| queue << keypad ? event.unicode : terminfo[] }
+      # key('KP_Multiply'){|event| queue << keypad ? event.unicode : terminfo[] }
+      # key('KP_Divide'){|event|   queue << keypad ? event.unicode : terminfo[] }
+      # key('KP_Insert'){|event|   queue << keypad ? event.unicode : terminfo[] }
+
+      key('Num_Lock'){|event|
+        if event.state == "0"
+          @numlock = true
+        else
+          @numlock = false
+        end
+      }
+
       buffer.focus
+    end
+
+    def key(sequence, &block)
+      buffer.bind("<#{sequence}>") do |event|
+        p event
+        yield(event)
+        Tk.callback_break
+      end
     end
 
     def destroy
@@ -97,9 +134,14 @@ class Yonde
     def try_execute(outbuf)
       termbinds.each do |sequence, action|
         if outbuf.start_with?(sequence)
-          p string: outbuf.slice!(0, sequence.size)
-          p action: action
-          puts
+          if $DEBUG
+            p string: outbuf.slice!(0, sequence.size)
+            p action: action
+            puts
+          else
+            outbuf.slice!(0, sequence.size)
+          end
+
           buffer.send(action)
           return nil
         elsif sequence.start_with?(outbuf.slice(0, sequence.size))
@@ -111,9 +153,13 @@ class Yonde
     end
 
     def term_cmd(string, full, *cmd)
-      p string: string.slice!(0, full.size)
-      p action: cmd
-      puts
+      if $DEBUG
+        p string: string.slice!(0, full.size)
+        p action: cmd
+        puts
+      else
+        string.slice!(0, full.size)
+      end
       buffer.send(*cmd) unless cmd.empty?
       string.empty?
     end

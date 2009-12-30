@@ -2,7 +2,7 @@
 
 require 'yonde'
 
-Tk.set_palette 'black'
+# Tk.set_palette 'black'
 Thread.abort_on_exception = true
 Tk.root.bind('<Control-q>'){ Tk.exit }
 yonde = Yonde.new(Tk.root)
