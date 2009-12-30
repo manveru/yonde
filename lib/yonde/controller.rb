@@ -80,13 +80,9 @@ class Yonde
 
     # called when outbuf changes
     def call(outbuf)
-      # p outbuf.size
-
       begin
         size = outbuf.size
-        # p before: outbuf
         try_execute(outbuf) && outbuf.replace('')
-        # p after: outbuf
         return if outbuf.empty?
         new_size = outbuf.size
       end while size != new_size
@@ -100,18 +96,13 @@ class Yonde
 
     def try_execute(outbuf)
       termbinds.each do |sequence, action|
-        if sequence == outbuf
-          # p action1: action
-          outbuf.slice!(0, sequence.size)
-          buffer.send(action)
-          return true
-        elsif outbuf.start_with?(sequence)
-          # p action3: action
-          outbuf.slice!(0, sequence.size)
+        if outbuf.start_with?(sequence)
+          p string: outbuf.slice!(0, sequence.size)
+          p action: action
+          puts
           buffer.send(action)
           return nil
         elsif sequence.start_with?(outbuf.slice(0, sequence.size))
-          # p action2: action
           return nil
         end
       end
@@ -120,14 +111,14 @@ class Yonde
     end
 
     def term_cmd(string, full, *cmd)
-      # p term_cmd: cmd
-      string.slice!(0, full.size)
+      p string: string.slice!(0, full.size)
+      p action: cmd
+      puts
       buffer.send(*cmd) unless cmd.empty?
       string.empty?
     end
 
     def term_input(string)
-      # p string
       case string
       when PARM_DCH
         term_cmd(string, $&, :parm_dch, $1.to_i)
@@ -147,7 +138,8 @@ class Yonde
       when ERASE_CHARS
         term_cmd(string, $&, :erase_chars, $1.to_i)
       when INITIALIZE_COLOR
-        term_cmd(string, $&, :initialize_color, $1)
+        args = *$1.split(';').map{|a| a.to_i }
+        term_cmd(string, $&, :initialize_color, *args)
       when SET_BACKGROUND
         args = *$1.split(';').map{|a| a.to_i }
         term_cmd(string, $&, :set_background, *args)
@@ -165,8 +157,6 @@ class Yonde
         term_cmd(string, $&, :parm_left_cursor, $1.to_i)
       when CURSOR_HOME
         term_cmd(string, $&, :cursor_home)
-      when /\A\e\[>(\w)/
-        term_cmd(string, $&, :wtf, $1)
       when /\A\e/
         nil
       when /\A[[:print:]\t]+/
