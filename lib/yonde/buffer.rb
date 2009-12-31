@@ -33,7 +33,7 @@ class Yonde
     FONTS = {}
 
     attr_accessor :controller
-    attr_reader :x, :y
+    attr_reader :x, :y, :background, :foreground
 
     def initialize(*args)
       super
@@ -43,12 +43,13 @@ class Yonde
       @font = CachingFont.new(base_font.configure)
       font_width = base_font.measure('0')
       font_height = base_font.metrics(:linespace)
-      @background = '#fff'
-      @foreground = '#000'
+      self.background = '#000'
+      self.foreground = '#fff'
 
       width   = font_height * 24
       height  = font_width * 80
       options = {
+        background: '#000',
         width:   font_height * 24,
         height:  font_width * 80,
         setgrid: true,
@@ -68,9 +69,9 @@ class Yonde
     end
 
     def update_tag
-      @tag = "#@foreground~#@background~#@font"
+      @tag = "#{foreground}~#{background}~#@font"
       TAGS[@tag] ||= (
-        tag_configure(@tag, foreground: @foreground, background: @background, font: @font)
+        tag_configure(@tag, foreground: foreground, background: background, font: @font)
         true
       )
     end
@@ -81,6 +82,16 @@ class Yonde
 
     def x=(x)
       @x = x.abs
+    end
+
+    def background=(bg)
+      # p background: bg
+      @background = bg
+    end
+
+    def foreground=(fg)
+      # p foreground: fg
+      @foreground = fg
     end
 
     def write(string)
@@ -186,6 +197,14 @@ class Yonde
     TERM_ATTRIBUTES[1] = A_BOLD
     TERM_ATTRIBUTES[7] = A_REVERSE
 
+    SET_COLORS = [
+      '#000', '#00f', '#0f0', '#0ff', '#f00', '#f0f', '#ff0', '#fff',
+    ]
+
+    SET_A_COLORS = [
+      '#000', '#f00', '#0f0', '#ff0', '#00f', '#f0f', '#0ff', '#fff',
+    ]
+
     # Following are all the methods corresponding to command sequences in
     # terminfo.
     # We should try to accumulate more information about what they are supposed
@@ -229,8 +248,9 @@ class Yonde
     end
 
     # change region to line #1 to line #2 (P)
-    def change_scroll_region(from, to)
-      Kernel.raise NotImplementedError
+    def change_scroll_region(top, bottom)
+      return if top > bottom
+      @scroll_top, @scroll_bot = top, bottom
     end
 
     # like ip but when in insert mode
@@ -1562,33 +1582,40 @@ class Yonde
     end
 
     # define video attributes #1-#9 (PG9)
-    def set_attributes
-      Kernel.raise NotImplementedError
-    end
-
-    # Set background color #1
-    def set_background(*indices)
-      if indices.empty? || indices == ANSI_RESET
-        @foreground = DARK_BLACK
-        @background = BRIGHT_WHITE
-      else
-        indices.each do |index|
-          index = index.to_i
-          tenth = index / 10
-
-          if tenth  == 3
-            @foreground = TERM_COLORS[index]
-          elsif tenth == 4
-            @background = TERM_COLORS[index]
-          elsif at = TERM_ATTRIBUTES[index]
-            @attribute = at
-          else
-            Kernel.raise "set_background(#{indices.inspect})"
-          end
+    def set_attributes(*args)
+      args.each do |arg|
+        case arg
+        when 0 # reset
+          self.background = '#000'
+          self.foreground = '#fff'
+          @font = (@font + {weight: :normal})
+        when 1 # bold
+          @font = (@font + {weight: :bold})
+        else # color?
+          set_ansi_color(arg)
         end
       end
 
       update_tag
+    end
+
+    def set_ansi_color(raw)
+      tenth, oneth = raw.divmod(10)
+
+      if tenth == 3
+        self.foreground = SET_A_COLORS.fetch(oneth)
+      elsif tenth == 4
+        self.background = SET_A_COLORS.fetch(oneth)
+      else
+        Kernel.raise ArgumentError, "set_ansi_color(%p)" % [raw]
+      end
+    end
+
+    # Set background color #1
+    def set_background(*colors)
+      colors.each{|color| set_ansi_color(color) }
+      update_tag
+    rescue IndexError
     end
 
     # Set bottom margin at current line
@@ -1612,28 +1639,10 @@ class Yonde
     end
 
     # Set foreground color #1
-    def set_foreground(*indices)
-      if indices.empty? || indices == ANSI_RESET
-        @foreground = DARK_BLACK
-        @background = BRIGHT_WHITE
-      else
-        indices.each do |index|
-          index = index.to_i
-          tenth = index / 10
-
-          if tenth  == 3
-            @foreground = TERM_COLORS[index]
-          elsif tenth == 4
-            @background = TERM_COLORS[index]
-          elsif at = TERM_ATTRIBUTES[index]
-            @attribute = at
-          else
-            Kernel.raise "set_foreground(#{indices.inspect})"
-          end
-        end
-      end
-
+    def set_foreground(*colors)
+      colors.each{|color| set_ansi_color(color) }
       update_tag
+    rescue IndexError
     end
 
     # set left soft margin at current column. See smgl. (ML is not in BSD termcap).
@@ -1938,14 +1947,16 @@ class Yonde
 
     # Set background color to #1, using ANSI escape
     def set_a_background(name)
-      @background = ANSI_COLORS.fetch(name)
+      self.background = SET_A_COLORS.fetch(name)
       update_tag
+    rescue IndexError
     end
 
     # Set foreground color to #1, using ANSI escape
     def set_a_foreground(name)
-      @foreground = ANSI_COLORS.fetch(name)
+      self.foreground = SET_A_COLORS.fetch(name)
       update_tag
+    rescue IndexError
     end
 
     # Change to ribbon color #1
@@ -2015,7 +2026,7 @@ class Yonde
 
     # turn on automatic margins
     def enter_am_mode
-      Kernel.raise NotImplementedError
+      @am_mode = true
     end
 
     # turn on blinking
@@ -2025,9 +2036,7 @@ class Yonde
 
     # turn on bold (extra bright) mode
     def enter_bold_mode
-      p before: @font
       @font = (@font + {weight: :bold})
-      p after: @font
     end
 
     # string to start programs using cup
@@ -2138,7 +2147,7 @@ class Yonde
 
     # end alternate character set (P)
     def exit_alt_charset_mode
-      Kernel.raise NotImplementedError
+      @alt_charset_mode = false
     end
 
     # turn off automatic margins
@@ -2168,7 +2177,7 @@ class Yonde
 
     # exit insert mode
     def exit_insert_mode
-      Kernel.raise NotImplementedError
+      @insert_mode = false
     end
 
     # End italic mode

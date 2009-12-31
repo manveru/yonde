@@ -22,8 +22,8 @@ class Yonde
     CHANGE_SCROLL_REGION = /\A\e\[(\d+);(\d+)r/
     COLUMN_ADDRESS       = /\A\e\[(\d+)G/
     CURSOR_ADDRESS       = /\A\e\[(\d+);(\d+)H/
-    ERASE_CHARS          = /\A\e\[(\d+)X/
     CURSOR_HOME          = /\A\e\[H/
+    ERASE_CHARS          = /\A\e\[(\d+)X/
     INITIALIZE_COLOR     = /\A\e\]([\d;]*)[m;]/
     PARM_DCH             = /\A\e\[(\d+)P/
     PARM_DOWN_CURSOR     = /\A\e\[(\d+)B/
@@ -32,15 +32,17 @@ class Yonde
     PARM_RIGHT_CURSOR    = /\A\e\[(\d+)C/
     PARM_UP_CURSOR       = /\A\e\[(\d+)A/
     ROW_ADDRESS          = /\A\e\[(\d+)d/
-    SET_A_BACKGROUND     = /\A\e\[48;5;(\d+)m/
-    SET_A_FOREGROUND     = /\A\e\[38;5;(\d+)m/
-    SET_BACKGROUND       = /\A\e\[\?([\d;]*)/
-    SET_FOREGROUND       = /\A\e\[([\d;]*)m/
+    SET_ATTRIBUTES       = /\A\e\[(0[;\d]*)m/
+    SET_A_BACKGROUND     = /\A\e\[48;5;([;\d]+)m/
+    SET_A_FOREGROUND     = /\A\e\[38;5;([;\d]+)m/
+    SET_BACKGROUND       = /\A\e\[(4[0-9][;\d]*)m/
+    SET_FOREGROUND       = /\A\e\[(3[0-9][;\d]*)m/
 
     def initialize(buffer)
       self.buffer = buffer
       self.termbinds = {}
       self.queue = Queue.new
+      self.keypad = false
 
       buffer.controller = self
 
@@ -51,17 +53,17 @@ class Yonde
       key('Left'){          queue << terminfo[:key_left] }
       key('Right'){         queue << terminfo[:key_right] }
 
-      key('KP_Begin'){|event|    queue << keypad ? event.unicode : terminfo[:key_beg] }
-      key('KP_Delete'){|event|   queue << keypad ? event.unicode : terminfo[:key_dc] }
-      key('KP_Down'){|event|     queue << keypad ? event.unicode : terminfo[:key_down] }
-      key('KP_End'){|event|      queue << keypad ? event.unicode : terminfo[:key_end] }
-      key('KP_Enter'){|event|    queue << keypad ? event.unicode : terminfo[:key_enter] }
-      key('KP_Home'){|event|     queue << keypad ? event.unicode : terminfo[:key_home] }
-      key('KP_Left'){|event|     queue << keypad ? event.unicode : terminfo[:key_left] }
-      key('KP_Next'){|event|     queue << keypad ? event.unicode : terminfo[:key_npage] }
-      key('KP_Prior'){|event|    queue << keypad ? event.unicode : terminfo[:key_ppage] }
-      key('KP_Right'){|event|    queue << keypad ? event.unicode : terminfo[:key_right] }
-      key('KP_Up'){|event|       queue << keypad ? event.unicode : terminfo[:key_up] }
+      key('KP_Begin'){|event|  queue << keypad ? event.unicode : terminfo[:key_beg] }
+      key('KP_Delete'){|event| queue << keypad ? event.unicode : terminfo[:key_dc] }
+      key('KP_Down'){|event|   queue << keypad ? event.unicode : terminfo[:key_down] }
+      key('KP_End'){|event|    queue << keypad ? event.unicode : terminfo[:key_end] }
+      key('KP_Enter'){|event|  queue << keypad ? event.unicode : terminfo[:key_enter] }
+      key('KP_Home'){|event|   queue << keypad ? event.unicode : terminfo[:key_home] }
+      key('KP_Left'){|event|   queue << keypad ? event.unicode : terminfo[:key_left] }
+      key('KP_Next'){|event|   queue << keypad ? event.unicode : terminfo[:key_npage] }
+      key('KP_Prior'){|event|  queue << keypad ? event.unicode : terminfo[:key_ppage] }
+      key('KP_Right'){|event|  queue << keypad ? event.unicode : terminfo[:key_right] }
+      key('KP_Up'){|event|     queue << keypad ? event.unicode : terminfo[:key_up] }
 
       # key('KP_Add'){|event|      queue << keypad ? event.unicode : terminfo[] }
       # key('KP_Subtract'){|event| queue << keypad ? event.unicode : terminfo[] }
@@ -82,7 +84,7 @@ class Yonde
 
     def key(sequence, &block)
       buffer.bind("<#{sequence}>") do |event|
-        p event
+        # p event
         yield(event)
         Tk.callback_break
       end
@@ -119,10 +121,12 @@ class Yonde
     def call(outbuf)
       begin
         size = outbuf.size
-        try_execute(outbuf) && outbuf.replace('')
-        return if outbuf.empty?
+        # puts
+        # p before: outbuf
+        try_execute(outbuf)
+        # p after: outbuf
         new_size = outbuf.size
-      end while size != new_size
+      end until new_size == 0 || size == new_size
     end
 
     def bind(sequence, action_name)
@@ -134,14 +138,8 @@ class Yonde
     def try_execute(outbuf)
       termbinds.each do |sequence, action|
         if outbuf.start_with?(sequence)
-          if $DEBUG
-            p string: outbuf.slice!(0, sequence.size)
-            p action: action
-            puts
-          else
-            outbuf.slice!(0, sequence.size)
-          end
-
+          outbuf.slice!(0, sequence.size)
+          # p action: action
           buffer.send(action)
           return nil
         elsif sequence.start_with?(outbuf.slice(0, sequence.size))
@@ -152,61 +150,95 @@ class Yonde
       term_input(outbuf)
     end
 
-    def term_cmd(string, full, *cmd)
-      if $DEBUG
-        p string: string.slice!(0, full.size)
-        p action: cmd
-        puts
-      else
-        string.slice!(0, full.size)
-      end
-      buffer.send(*cmd) unless cmd.empty?
-      string.empty?
-    end
-
     def term_input(string)
       case string
-      when PARM_DCH
-        term_cmd(string, $&, :parm_dch, $1.to_i)
-      when CHANGE_SCROLL_REGION
-        term_cmd(string, $&, :change_scroll_region, $1.to_i, $2.to_i)
-      when COLUMN_ADDRESS
-        term_cmd(string, $&, :column_address, $1.to_i)
-      when ROW_ADDRESS
-        term_cmd(string, $&, :row_address, $1.to_i)
-      when SET_A_BACKGROUND
-        term_cmd(string, $&, :set_a_background, $1.to_i)
-      when SET_A_FOREGROUND
-        term_cmd(string, $&, :set_a_foreground, $1.to_i)
-      when SET_FOREGROUND
-        args = *$1.split(';').map{|a| a.to_i }
-        term_cmd(string, $&, :set_foreground, *args)
-      when ERASE_CHARS
-        term_cmd(string, $&, :erase_chars, $1.to_i)
-      when INITIALIZE_COLOR
-        args = *$1.split(';').map{|a| a.to_i }
-        term_cmd(string, $&, :initialize_color, *args)
-      when SET_BACKGROUND
-        args = *$1.split(';').map{|a| a.to_i }
-        term_cmd(string, $&, :set_background, *args)
-      when PARM_ICH
-        term_cmd(string, $&, :parm_ich, $1.to_i)
-      when CURSOR_ADDRESS
-        term_cmd(string, $&, :cursor_address, $1.to_i, $2.to_i)
-      when PARM_UP_CURSOR
-        term_cmd(string, $&, :parm_up_cursor, $1.to_i)
-      when PARM_DOWN_CURSOR
-        term_cmd(string, $&, :parm_down_cursor, $1.to_i)
-      when PARM_RIGHT_CURSOR
-        term_cmd(string, $&, :parm_right_cursor, $1.to_i)
-      when PARM_LEFT_CURSOR
-        term_cmd(string, $&, :parm_left_cursor, $1.to_i)
-      when CURSOR_HOME
-        term_cmd(string, $&, :cursor_home)
       when /\A\e/
-        nil
+        case string
+        when CHANGE_SCROLL_REGION
+          # p change_scroll_region: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.change_scroll_region($1.to_i, $2.to_i)
+        when COLUMN_ADDRESS
+          # p column_address: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.column_address($1.to_i)
+        when CURSOR_ADDRESS
+          # p cursor_address: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.cursor_address($1.to_i, $2.to_i)
+        when CURSOR_HOME
+          # p cursor_home: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.cursor_home
+        when ERASE_CHARS
+          # p erase_chars: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.erase_chars($1.to_i)
+        when INITIALIZE_COLOR
+          # p initialize_color: [$&, $1]
+          string.slice!(0, $&.size)
+          args = $1.split(';').map{|a| a.to_i }
+          buffer.initialize_color(*args)
+        when PARM_DCH
+          # p parm_dch: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.parm_dch($1.to_i)
+        when PARM_DOWN_CURSOR
+          # p parm_down_cursorr: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.parm_down_cursor($1.to_i)
+        when PARM_ICH
+          # p parm_ich: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.parm_ich($1.to_i)
+        when PARM_LEFT_CURSOR
+          # p parm_left_cursor: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.parm_left_cursor($1.to_i)
+        when PARM_RIGHT_CURSOR
+          # p parm_right_cursor: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.parm_right_cursor($1.to_i)
+        when PARM_UP_CURSOR
+          # p parm_up_cursor: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.parm_up_cursor($1.to_i)
+        when ROW_ADDRESS
+          # p row_address: [$&, $1]
+          string.slice!(0, $&.size)
+          buffer.row_address($1.to_i)
+        when SET_A_BACKGROUND
+          string.slice!(0, $&.size)
+          args = $1.split(';').map{|a| a.to_i }
+          # p set_a_background: [$&, *args]
+          buffer.set_a_background(*args)
+        when SET_A_FOREGROUND
+          string.slice!(0, $&.size)
+          args = $1.split(';').map{|a| a.to_i }
+          # p set_a_foreground: [$&, *args]
+          buffer.set_a_foreground(*args)
+        when SET_ATTRIBUTES
+          string.slice!(0, $&.size)
+          args = $1.split(';').map{|a| a.to_i }
+          # p set_attributes: [$&, *args]
+          buffer.set_attributes(*args)
+        when SET_BACKGROUND
+          string.slice!(0, $&.size)
+          args = $1.split(';').map{|a| a.to_i }
+          # p set_background: [$&, *args]
+          buffer.set_background(*args)
+        when SET_FOREGROUND
+          string.slice!(0, $&.size)
+          args = $1.split(';').map{|a| a.to_i }
+          # p set_foreground: [$&, *args]
+          buffer.set_foreground(*args)
+        else
+          return nil
+        end
       when /\A[[:print:]\t]+/
-        term_cmd(string, $&, :write, $&)
+        # p write: $&
+        string.slice!(0, $&.size)
+        buffer.write($&)
       end
     end
   end
