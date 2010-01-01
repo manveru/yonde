@@ -36,6 +36,7 @@ class Yonde
           # gsub(/\\\^/, '^')
       when /^(\w+)#(\d+),$/
         set[$1.to_sym] = $2.to_i
+      when /^(\w+)@,$/ # canceled capability
       else
         fail line
       end

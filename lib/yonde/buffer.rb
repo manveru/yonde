@@ -28,6 +28,9 @@ class Yonde
     end
   end
 
+  # Issues:
+  #   * what the heck is correct scroll region behaviour?
+  #   * need binding for ioctl to tell the world our real dimensions
   class Buffer < Tk::Text
     TAGS = {}
     FONTS = {}
@@ -39,24 +42,24 @@ class Yonde
       super
       @y, @x = 1, 0
 
-      base_font = Tk::Font.new('DejaVu Sans Mono 12')
+      base_font = Tk::Font.new('Terminus 9')
       @font = CachingFont.new(base_font.configure)
       font_width = base_font.measure('0')
       font_height = base_font.metrics(:linespace)
       self.background = '#000'
       self.foreground = '#fff'
 
-      width   = font_height * 24
-      height  = font_width * 80
       options = {
         background: '#000',
-        width:   font_height * 24,
-        height:  font_width * 80,
+        borderwidth:  2,
+        width:   80,
+        height:  24,
         setgrid: true,
         wrap:    :char,
       }
 
       configure(options)
+      clear_screen
     end
 
     def empty?
@@ -77,11 +80,11 @@ class Yonde
     end
 
     def y=(y)
-      @y = y.abs
+      @y = y >= 1 ? y : 1
     end
 
     def x=(x)
-      @x = x.abs
+      @x = x >= 0 ? x : 0
     end
 
     def background=(bg)
@@ -92,6 +95,10 @@ class Yonde
     def foreground=(fg)
       # p foreground: fg
       @foreground = fg
+    end
+
+    def rgb_to_hex(r, g, b)
+      '#' << [r, g, b].map{|n| n.to_s(16) }.join
     end
 
     def write(string)
@@ -156,54 +163,17 @@ class Yonde
     A_PROTECT    = 128
     A_ALTCHARSET = 256
 
-    DARK_BLACK   = '#000000'
-    DARK_RED     = '#cd0000'
-    DARK_GREEN   = '#cd0000'
-    DARK_YELLOW  = '#cdcd00'
-    DARK_BLUE    = '#0000cd'
-    DARK_MAGENTA = '#cd00cd'
-    DARK_CYAN    = '#00cdcd'
-    DARK_WHITE   = '#faebd7'
-
-    BRIGHT_BLACK   = '#404040'
-    BRIGHT_RED     = '#ff0000'
-    BRIGHT_GREEN   = '#00ff00'
-    BRIGHT_YELLOW  = '#ffff00'
-    BRIGHT_BLUE    = '#0000ff'
-    BRIGHT_MAGENTA = '#ff00ff'
-    BRIGHT_CYAN    = '#00ffff'
-    BRIGHT_WHITE   = '#ffffff'
-
-    TERM_COLORS = {}
-    TERM_COLORS[30] = BRIGHT_BLACK
-    TERM_COLORS[31] = BRIGHT_RED
-    TERM_COLORS[32] = BRIGHT_GREEN
-    TERM_COLORS[33] = BRIGHT_YELLOW
-    TERM_COLORS[34] = BRIGHT_BLUE
-    TERM_COLORS[35] = BRIGHT_MAGENTA
-    TERM_COLORS[36] = BRIGHT_CYAN
-    TERM_COLORS[37] = BRIGHT_WHITE
-    TERM_COLORS[40] = BRIGHT_BLACK
-    TERM_COLORS[41] = BRIGHT_RED
-    TERM_COLORS[42] = BRIGHT_GREEN
-    TERM_COLORS[43] = BRIGHT_YELLOW
-    TERM_COLORS[44] = BRIGHT_BLUE
-    TERM_COLORS[45] = BRIGHT_MAGENTA
-    TERM_COLORS[46] = BRIGHT_CYAN
-    TERM_COLORS[47] = BRIGHT_WHITE
-
-    TERM_ATTRIBUTES = {}
-    TERM_ATTRIBUTES[0] = nil
-    TERM_ATTRIBUTES[1] = A_BOLD
-    TERM_ATTRIBUTES[7] = A_REVERSE
-
     SET_COLORS = [
       '#000', '#00f', '#0f0', '#0ff', '#f00', '#f0f', '#ff0', '#fff',
     ]
 
     SET_A_COLORS = [
       '#000', '#f00', '#0f0', '#ff0', '#00f', '#f0f', '#0ff', '#fff',
+      nil, '#fff',
     ]
+
+    COLOR_PAIRS = []
+    TABSTOPS = []
 
     # Following are all the methods corresponding to command sequences in
     # terminfo.
@@ -260,7 +230,8 @@ class Yonde
 
     # clear all tab stops (P)
     def clear_all_tabs
-      Kernel.raise NotImplementedError
+      TABSTOPS.clear
+      configure(tabs: 8)
     end
 
     # clear right and left soft margins
@@ -270,23 +241,33 @@ class Yonde
 
     # clear screen and home cursor (P*)
     def clear_screen
-      Kernel.raise NotImplementedError
+      replace('1.0', 'end', Array.new(24){ ' ' * 80 }.join("\n"))
+
+      cursor_home
     end
 
     # Clear to beginning of line
     def clr_bol
-      Kernel.raise NotImplementedError
+      from, to = "#{y}.#{x} linestart", "#{y}.#{x}"
+      replace(from, to, get(from, to).gsub(/./, ' '))
+      adjust_insert
     end
 
     # clear to end of line (P)
     def clr_eol
-      replace("#{y}.#{x}", "#{y}.#{x} lineend", get("#{y}.#{x}", "#{y}.#{x} lineend").gsub(/./, ' '))
+      from, to = "#{y}.#{x}", "#{y}.#{x} lineend"
+      replace(from, to, get(from, to).gsub(/./, ' '))
       adjust_insert
     end
 
     # clear to end of screen (P*)
     def clr_eos
-      replace("#{y}.#{x}", 'end', get("#{y}.#{x}", "end").gsub(/./, ' '))
+      line = get("#{y}.#{x} linestart", "#{y}.#{x}")
+      replace("#{y}.#{x} linestart", "#{y}.#{x} lineend", line[0, 80])
+      (y + 1).upto(count('1.0', 'end', :lines)) do |y|
+        replace("#{y}.0 linestart", "#{y}.0 lineend", ' ' * 80)
+      end
+
       adjust_insert
     end
 
@@ -313,7 +294,7 @@ class Yonde
         replace("#{y}.0", "#{y}.0 lineend", current.ljust(x, " ") + "\n")
       end
 
-      self.x, self.y = x, y
+      self.y, self.x = y, x
       adjust_insert
     end
 
@@ -324,7 +305,8 @@ class Yonde
 
     # home cursor (if no cup)
     def cursor_home
-      self.y, self.x = 0, 0
+      self.y, self.x = 1, 0
+      adjust_insert
     end
 
     # make cursor invisible
@@ -408,7 +390,7 @@ class Yonde
 
     # enable alternate char set
     def ena_acs
-      Kernel.raise NotImplementedError
+      # Kernel.raise NotImplementedError
     end
 
     # erase #1 characters (P)
@@ -481,8 +463,8 @@ class Yonde
     end
 
     # Initialize color pair #1 to fg=(#2,#3,#4), bg=(#5,#6,#7)
-    def initialize_pair
-      Kernel.raise NotImplementedError
+    def initialize_pair(name, fgr, fgg, fgb, bgr, bgg, bgb)
+      COLOR_PAIRS[name] = [rgb_to_hex(fgr, fgg, fgb), rgb_to_hex(bgr, bgg, bgb)]
     end
 
     # insert character (P)
@@ -492,7 +474,7 @@ class Yonde
 
     # insert line (P*)
     def insert_line
-      Kernel.raise NotImplementedError
+      insert("#{y}.0 lineend", "\n")
     end
 
     # insert padding after inserted character
@@ -1244,6 +1226,7 @@ class Yonde
     # up-arrow key
     def key_up
       self.y -= 1
+      adjust_insert
     end
 
     # leave 'keyboard_transmit' mode
@@ -1370,9 +1353,8 @@ class Yonde
 
     # newline (behave like cr followed by lf)
     def newline
-      self.y += 1
       self.x = 0
-      insert("#{y}.#{x}", "\n")
+      self.y += 1
       adjust_insert
     end
 
@@ -1388,7 +1370,7 @@ class Yonde
 
     # Set default pair to its original value
     def orig_pair
-      Kernel.raise NotImplementedError
+      COLOR_PAIRS[0] = []
     end
 
     # padding char (instead of null)
@@ -1428,7 +1410,7 @@ class Yonde
     end
 
     # move #1 characters to the left (P)
-    def parm_left_cursor
+    def parm_left_cursor(count)
       self.x -= count
       adjust_insert
     end
@@ -1455,7 +1437,7 @@ class Yonde
     end
 
     # up #1 lines (P*)
-    def parm_up_cursor
+    def parm_up_cursor(count)
       self.y -= count
       adjust_insert
     end
@@ -1532,17 +1514,17 @@ class Yonde
 
     # reset string
     def reset_1string
-      Kernel.raise NotImplementedError
+      # Kernel.raise NotImplementedError
     end
 
     # reset string
     def reset_2string
-      Kernel.raise NotImplementedError
+      # Kernel.raise NotImplementedError
     end
 
     # reset string
     def reset_3string
-      Kernel.raise NotImplementedError
+      # Kernel.raise NotImplementedError
     end
 
     # name of reset file
@@ -1573,6 +1555,7 @@ class Yonde
 
     # scroll text down (P)
     def scroll_reverse
+      p top: @scroll_top, bot: @scroll_bot
       Kernel.raise NotImplementedError
     end
 
@@ -1596,6 +1579,12 @@ class Yonde
         end
       end
 
+      if args.empty?
+        self.background = '#000'
+        self.foreground = '#fff'
+        @font = (@font + {weight: :normal})
+      end
+
       update_tag
     end
 
@@ -1609,13 +1598,20 @@ class Yonde
       else
         Kernel.raise ArgumentError, "set_ansi_color(%p)" % [raw]
       end
+    rescue IndexError => ex
+      warn ex.message
     end
 
     # Set background color #1
     def set_background(*colors)
-      colors.each{|color| set_ansi_color(color) }
+      colors.each{|color|
+        if color < 49
+          set_ansi_color(color)
+        else
+          self.background = ANSI_COLORS.fetch(color)
+        end
+      }
       update_tag
-    rescue IndexError
     end
 
     # Set bottom margin at current line
@@ -1642,7 +1638,6 @@ class Yonde
     def set_foreground(*colors)
       colors.each{|color| set_ansi_color(color) }
       update_tag
-    rescue IndexError
     end
 
     # set left soft margin at current column. See smgl. (ML is not in BSD termcap).
@@ -1667,7 +1662,9 @@ class Yonde
 
     # set a tab in every row, current columns
     def set_tab
-      Kernel.raise NotImplementedError
+      TABSTOPS << x
+      TABSTOPS.sort!
+      configure(tabs: TABSTOPS)
     end
 
     # Set top margin at current line
@@ -1727,7 +1724,7 @@ class Yonde
 
     # move to status line, column #1
     def to_status_line
-      Kernel.raise NotImplementedError
+      self.y, self.x = 24, 1
     end
 
     # select touch tone dialing
@@ -1947,16 +1944,24 @@ class Yonde
 
     # Set background color to #1, using ANSI escape
     def set_a_background(name)
-      self.background = SET_A_COLORS.fetch(name)
+      if name < 8
+        self.background = SET_A_COLORS.fetch(name)
+      else
+        self.background = ANSI_COLORS.fetch(name)
+      end
+
       update_tag
-    rescue IndexError
     end
 
     # Set foreground color to #1, using ANSI escape
     def set_a_foreground(name)
-      self.foreground = SET_A_COLORS.fetch(name)
+      if name < 8
+        self.foreground = SET_A_COLORS.fetch(name)
+      else
+        self.foreground = ANSI_COLORS.fetch(name)
+      end
+
       update_tag
-    rescue IndexError
     end
 
     # Change to ribbon color #1
@@ -2039,9 +2044,9 @@ class Yonde
       @font = (@font + {weight: :bold})
     end
 
-    # string to start programs using cup
+    # start programs using cup
     def enter_ca_mode
-      delete(1.0, :end)
+      clear_screen
     end
 
     # enter delete mode
@@ -2101,7 +2106,7 @@ class Yonde
 
     # turn on reverse video mode
     def enter_reverse_mode
-      Kernel.raise NotImplementedError
+      self.foreground, self.background = self.background, self.foreground
     end
 
     # turn on blank mode (characters invisible)
@@ -2157,12 +2162,14 @@ class Yonde
 
     # turn off all attributes
     def exit_attribute_mode
-      Kernel.raise NotImplementedError
+      @font += {weight: :normal}
     end
 
-    # strings to end programs using cup
+    # end programs using cup
     def exit_ca_mode
-      Kernel.raise NotImplementedError
+      delete(1.0, :end)
+      self.x, self.y = 0, 1
+      adjust_insert
     end
 
     # end delete mode
@@ -2229,5 +2236,6 @@ class Yonde
     def exit_xon_mode
       Kernel.raise NotImplementedError
     end
+
   end
 end

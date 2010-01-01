@@ -7,7 +7,6 @@ class Yonde
     outbuf = ''
 
     Thread.new do
-      ENV['TERM'] = 'rxvt-unicode' # let's hope you have it :)
       shell = ENV['SHELL'] || 'bash'
 
       PTY.spawn(shell) do |r_pty, w_pty, pid|

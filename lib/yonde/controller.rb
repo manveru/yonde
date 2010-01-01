@@ -32,10 +32,10 @@ class Yonde
     PARM_RIGHT_CURSOR    = /\A\e\[(\d+)C/
     PARM_UP_CURSOR       = /\A\e\[(\d+)A/
     ROW_ADDRESS          = /\A\e\[(\d+)d/
-    SET_ATTRIBUTES       = /\A\e\[(0[;\d]*)m/
+    SET_ATTRIBUTES       = /\A\e\[(0[;\d]*|)m/
     SET_A_BACKGROUND     = /\A\e\[48;5;([;\d]+)m/
     SET_A_FOREGROUND     = /\A\e\[38;5;([;\d]+)m/
-    SET_BACKGROUND       = /\A\e\[(4[0-9][;\d]*)m/
+    SET_BACKGROUND       = /\A\e\[(4[0-9][;\d]*|[^3][;\d]*)m/
     SET_FOREGROUND       = /\A\e\[(3[0-9][;\d]*)m/
 
     def initialize(buffer)
@@ -106,11 +106,12 @@ class Yonde
       end
 
       case term
-      when /rxvt|xterm/
+      when /rxvt|xterm|screen/
         bind("\e[H\e[2J", :cursor_home)
         bind("\r", :carriage_return)
         bind("\b", :backspace)
         bind("\n", :newline)
+        bind("\a", :clr_bol)
       end
 
       self.term = term
@@ -126,6 +127,9 @@ class Yonde
         try_execute(outbuf)
         # p after: outbuf
         new_size = outbuf.size
+        if new_size == size
+          warn "missing: #{outbuf.inspect}"
+        end
       end until new_size == 0 || size == new_size
     end
 
@@ -139,7 +143,7 @@ class Yonde
       termbinds.each do |sequence, action|
         if outbuf.start_with?(sequence)
           outbuf.slice!(0, sequence.size)
-          # p action: action
+          p action
           buffer.send(action)
           return nil
         elsif sequence.start_with?(outbuf.slice(0, sequence.size))
@@ -155,56 +159,56 @@ class Yonde
       when /\A\e/
         case string
         when CHANGE_SCROLL_REGION
-          # p change_scroll_region: [$&, $1]
+          p change_scroll_region: [$&, $1, $2]
           string.slice!(0, $&.size)
           buffer.change_scroll_region($1.to_i, $2.to_i)
         when COLUMN_ADDRESS
-          # p column_address: [$&, $1]
+          p column_address: [$&, $1]
           string.slice!(0, $&.size)
           buffer.column_address($1.to_i)
         when CURSOR_ADDRESS
-          # p cursor_address: [$&, $1]
+          p cursor_address: [$&, $1, $2]
           string.slice!(0, $&.size)
           buffer.cursor_address($1.to_i, $2.to_i)
         when CURSOR_HOME
-          # p cursor_home: [$&, $1]
+          p cursor_home: [$&, $1]
           string.slice!(0, $&.size)
           buffer.cursor_home
         when ERASE_CHARS
-          # p erase_chars: [$&, $1]
+          p erase_chars: [$&, $1]
           string.slice!(0, $&.size)
           buffer.erase_chars($1.to_i)
         when INITIALIZE_COLOR
-          # p initialize_color: [$&, $1]
+          p initialize_color: [$&, $1]
           string.slice!(0, $&.size)
           args = $1.split(';').map{|a| a.to_i }
           buffer.initialize_color(*args)
         when PARM_DCH
-          # p parm_dch: [$&, $1]
+          p parm_dch: [$&, $1]
           string.slice!(0, $&.size)
           buffer.parm_dch($1.to_i)
         when PARM_DOWN_CURSOR
-          # p parm_down_cursorr: [$&, $1]
+          p parm_down_cursor: [$&, $1]
           string.slice!(0, $&.size)
           buffer.parm_down_cursor($1.to_i)
         when PARM_ICH
-          # p parm_ich: [$&, $1]
+          p parm_ich: [$&, $1]
           string.slice!(0, $&.size)
           buffer.parm_ich($1.to_i)
         when PARM_LEFT_CURSOR
-          # p parm_left_cursor: [$&, $1]
+          p parm_left_cursor: [$&, $1]
           string.slice!(0, $&.size)
           buffer.parm_left_cursor($1.to_i)
         when PARM_RIGHT_CURSOR
-          # p parm_right_cursor: [$&, $1]
+          p parm_right_cursor: [$&, $1]
           string.slice!(0, $&.size)
           buffer.parm_right_cursor($1.to_i)
         when PARM_UP_CURSOR
-          # p parm_up_cursor: [$&, $1]
+          p parm_up_cursor: [$&, $1]
           string.slice!(0, $&.size)
           buffer.parm_up_cursor($1.to_i)
         when ROW_ADDRESS
-          # p row_address: [$&, $1]
+          p row_address: [$&, $1]
           string.slice!(0, $&.size)
           buffer.row_address($1.to_i)
         when SET_A_BACKGROUND
@@ -232,11 +236,16 @@ class Yonde
           args = $1.split(';').map{|a| a.to_i }
           # p set_foreground: [$&, *args]
           buffer.set_foreground(*args)
+        when /\A\ek(.+)\e\\/
+          string.slice!(0, $&.size)
+          $0 = $1
         else
           return nil
         end
+      when /\A\x0f/
+        string.slice!(0, $&.size)
       when /\A[[:print:]\t]+/
-        # p write: $&
+        p write: $&
         string.slice!(0, $&.size)
         buffer.write($&)
       end
